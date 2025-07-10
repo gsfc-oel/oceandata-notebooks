@@ -1,4 +1,3 @@
 #!/bin/bash
-set -euo pipefail
-eval "$(ssh-agent -s)"
+
 exec "$@"
