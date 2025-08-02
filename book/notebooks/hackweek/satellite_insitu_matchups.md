@@ -1,57 +1,63 @@
 ---
 kernelspec:
-  name: python3
   display_name: Python 3 (ipykernel)
   language: python
+  name: python3
 ---
 
 # Matchups of in situ data with satellite data
 
-**Tutorial Leads:** Anna Windle (NASA, SSAI), James Allen (NASA, MSU)
+**Demo Leads:** James Allen (NASA, MSU), Anna Windle (NASA, SSAI)
 
 ## Summary
 
-In this example we will conduct matchups of in situ AERONET-OC Rrs data with PACE OCI Rrs data. The Aerosol Robotic Network (AERONET) was developed to sustain atmospheric studies at various scales with measurements from worldwide distributed autonomous sun-photometers. This has been extended to support marine applications, called AERONET – Ocean Color [(AERONET-OC)](https://aeronet.gsfc.nasa.gov/new_web/ocean_levels_versions.html), and provides the additional capability of measuring the radiance emerging from the sea (i.e., water-leaving radiance) with modified sun-photometers installed on offshore platforms like lighthouses, oceanographic and oil towers. AERONET-OC is instrumental in satellite ocean color validation activities.
+In this example we will conduct matchups of in situ AERONET-OC Rrs data with PACE OCI Rrs data. 
 
-In this tutorial, we will be collecting Rrs data from the  [Casablanca Platform](https://aeronet.gsfc.nasa.gov/cgi-bin/data_display_seaprism_v3?site=Casablanca_Platform&nachal=2&level=3&place_code=10) AERONET-OC site located at 40.7N, 1.4W in the western Mediterranean Sea which is typically characterized as oligotrophic/mesotrophic (ocean color signals tend to strongly covary with chlorophyll a).
+The Aerosol Robotic Network (AERONET) was developed to sustain atmospheric studies at various scales with measurements from worldwide distributed autonomous sun-photometers. This has been extended to support marine applications, called AERONET – Ocean Color [(AERONET-OC)](https://aeronet.gsfc.nasa.gov/new_web/ocean_levels_versions.html), and provides the additional capability of measuring the radiance emerging from the sea (i.e., water-leaving radiance) with modified sun-photometers installed on offshore platforms like lighthouses, oceanographic and oil towers. AERONET-OC is instrumental in satellite ocean color validation activities.
 
-We will be collecting PACE OCI Rrs data in a 5x5 pixel window around the AERONET-OC site to compare to the AERONET-OC Rrs data.
+In this tutorial, we will be collecting Rrs data from the [AAOT](https://aeronet.gsfc.nasa.gov/cgi-bin/data_display_seaprism_v3?site=AAOT&nachal=2&level=2&place_code=10) AERONET-OC site located at 45.3N, 12.5E off the coast of Venice, Italy.
+
+We will extract PACE OCI Rrs data in a 5x5 pixel window around the AERONET-OC site and compare it to in situ AERONET-OC Rrs observations.
 
 ## Learning Objectives
 
-At the end of this notebook you will know:
+At the end of this notebook you will be able to:
 
-* How to access Rrs data from a specific AERONET-OC site and time
-* How to access PACE OCI Rrs data from a specific location and time
-* How to match in situ and satellite data
-* How to apply statistics and plot matchup data
+- Access and parse data from a specific AERONET-OC site and date range
+- Access and filter PACE OCI Rrs data from a specific region and date range
+- Match satellite and in situ data spatially and temporally
+- Visualize matchup performance with statistical plots (Bland-Altman and scatter)
+
+Throughout, you'll gain experience with Python tools including `pandas`, `xarray`, and `matplotlib`, as well as real-world remote sensing workflows.
 
 ## Contents
 
 1. [Setup](#1.-Setup)
 2. [Process AERONET-OC data](#2.-Process-AERONET-OC-data)
-3. [Process PACE OCI data](#3.-Process-PACE-OCI-data)
+3. [Download PACE OCI granules](#3.-Download-PACE-OCI-granules)
 4. [Apply matchup code](#4.-Apply-matchup-code)
 5. [Make plots](#5.-Make-plots)
 
-+++ {"jp-MarkdownHeadingCollapsed": true}
++++
 
 ## 1. Setup
 
 We begin by loading a set of utility functions that work behind the scenes to do the majority of the work for us.
-Collapse this for now and just run the cell, but feel free to dig into it and see how things work!
+
+**Collapse this cell and just run it** — but feel free to explore it later to see how these functions are implemented. Understanding what's under the hood will deepen your skills!
 
 <div class="alert alert-block alert-warning">
-
-Note that the `get_f0` function requires the thuillier2003_f0.nc file. For the Hackweek, this is being pulled from the shared-public directory. For others trying to run the notebook, the .nc file can be found [here](https://oceancolor.gsfc.nasa.gov/docs/rsr/f0.txt).
-
+Note: The `get_f0` function requires an OCI sensor data file from the OCSSW shared files. Make sure your path is set up to be able to read the OCSSWROOT environment variable! If not, you can always download the F0 (TSIS-1 0.1nm) file from https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/
 </div>
 
 ```{code-cell} ipython3
-:lines_to_end_of_cell_marker: 0
-:lines_to_next_cell: 1
-:tags: [hide-cell]
-
+---
+lines_to_end_of_cell_marker: 0
+lines_to_next_cell: 1
+tags: [hide-cell]
+jupyter:
+  source_hidden: true
+---
 """Helper functions for PACE Hackweek Validation Tutorial.
 
 Authors:
@@ -59,6 +65,7 @@ Authors:
 """
 
 import datetime
+import os
 import re
 from pathlib import Path
 
@@ -68,7 +75,6 @@ import matplotlib.pyplot as plt
 import matplotlib.style as style
 import numpy as np
 import pandas as pd
-import pvlib.solarposition as sunpos
 import seaborn as sns
 import xarray as xr
 from matplotlib.ticker import FuncFormatter
@@ -76,7 +82,13 @@ from scipy import odr, stats
 
 # AERONET-OC Download Constants
 # Valid AERONET-OC site list
-AERONET_SITES = [
+DF_AERONET_SITES = pd.read_csv(
+    "https://aeronet.gsfc.nasa.gov/aeronet_locations_v3.txt",
+    delimiter=",",
+    skiprows=1
+    )
+AERONET_SITES = list(DF_AERONET_SITES["Site_Name"].sort_values())
+OCEAN_SITES = [
     "AAOT",
     "Abu_Al_Bukhoosh",
     "ARIAKE_TOWER",
@@ -119,16 +131,16 @@ AERONET_SITES = [
 # Get subset of AERONET columns to make it a bit more manageable (also rename)
 AOC_KEEP_COLS = [
     "AERONET_Site",
-    "aoc_datetime",
+    "field_datetime",
     "Site_Latitude(Degrees)",
     "Site_Longitude(Degrees)",
     "Solar_Zenith_Angle[400nm]",
 ]
 COLUMN_RENAME = {
-    "Site_Latitude(Degrees)": "aoc_latitude",
-    "Site_Longitude(Degrees)": "aoc_longitude",
-    "AERONET_Site": "aoc_site",
-    "Solar_Zenith_Angle[400nm]": "aoc_solar_zenith",
+    "Site_Latitude(Degrees)": "field_latitude",
+    "Site_Longitude(Degrees)": "field_longitude",
+    "AERONET_Site": "field_site",
+    "Solar_Zenith_Angle[400nm]": "field_solar_zenith",
 }
 
 # Bland-Altman/Scatterplot Constants
@@ -151,7 +163,9 @@ sns.set_context("notebook", font_scale=1.45)
 # Satellite Matchup Constants
 # Short names for earthaccess lookup
 SAT_LOOKUP = {
-    "PACE": "PACE_OCI_L2_AOP_NRT",
+    "PACE_AOP": "PACE_OCI_L2_AOP",
+    "PACE_IOP": "PACE_OCI_L2_IOP",
+    "PACE_BGC": "PACE_OCI_L2_BGC",
     "AQUA": "MODISA_L2_OC",
     "TERRA": "MODIST_L2_OC",
     "NOAA-20": "VIIRSJ1_L2_OC",
@@ -210,50 +224,61 @@ EXCLUSION_FLAGS = [
     "NAVWARN",
 ]
 
+# OCSSW Dataroot folder for tables
+OCDATAROOT = Path(os.environ.get("OCSSWROOT")).resolve() / "share"
+OCI_SENSOR_FILE = (OCDATAROOT / "oci/msl12_sensor_info.dat").resolve()
+
 ##---------------------------------------------------------------------------##
 #                              General Utilities                              #
 ##---------------------------------------------------------------------------##
 
 
-def get_f0(wavelengths=None, obs_time=None, window_size=10, f0_file=None):
-    """Load the Thuillier2003 netCDF file and return F0.
+def get_f0(wavelengths=None, window_size=10):
+    """Load the OCI sensor file and return F0.
 
     Defaults to returning the full table. Input obs_time to correct for the
     Earth-Sun distance.
 
     Parameters
     ----------
+    sensor_file : str or pathlib.Path
+        Path to the OCI satellite sensor file containing wavelengths and F0.
     wavelengths : array-like, optional
         Wavelengths at which to compute the average irradiance.
         If None, returns the full wavelength and irradiance table.
-    obs_time : datetime.datetime or pd.Series, optional
-        Observation time(s) used to correct for the Earth-Sun distance.
-        If None, return the mean F0 values.
     window_size : int, optional
         Bandpass filter size for mean filtering to selected wavelengths, in nm.
-    f0_file : str or pathlib.Path
-        Path to the f0 netCDF file of the lookup table.
 
     Returns
     -------
     tuple of np.ndarray
         A tuple containing:
         - f0_spectra : np.ndarray
-            The solar irradiance values.
+            The extraterrestrial solar irradiance, in uW/cm^2/nm.
         - f0_wave : np.ndarray
-            The corresponding wavelengths.
+            The corresponding wavelengths, in nm.
 
     """
-    if f0_file is None:
-        f0_file = Path("/home/jovyan/shared/pace-hackweek-2024/thuillier2003_f0.nc")
-    f0_file = Path(f0_file)
+    with open(OCI_SENSOR_FILE, "r") as file_in:
+        for line in file_in:
+            if "Nbands" in line:
+                (key, nbands) = line.split("=")
+                break
 
-    if not f0_file.is_file():
-        raise FileNotFoundError(f"File not found: {f0_file}")
-
-    ds_f0 = xr.load_dataset(f0_file)
-    wl = ds_f0["wavelength"].values
-    f0 = ds_f0["irradiance"].values
+    wl = np.zeros(int(nbands), dtype=float)
+    f0 = np.zeros(int(nbands), dtype=float)
+    with open(OCI_SENSOR_FILE, "r") as file_in:
+        for line in file_in:
+            if "=" in line:
+                (key, value) = line.split("=")
+                if "Lambda" in key:
+                    idx = re.findall(r"\d+", key)
+                    wvlidx = int(idx[0]) - 1
+                    wl[wvlidx] = float(value)
+                if "F0" in key:
+                    idx = re.findall(r"\d+", key)
+                    wvlidx = int(idx[1]) - 1
+                    f0[wvlidx] = float(value)
 
     if wavelengths is not None:
         f0_wave = np.array(wavelengths)
@@ -262,20 +287,15 @@ def get_f0(wavelengths=None, obs_time=None, window_size=10, f0_file=None):
         f0_wave = wl
         f0_spectra = f0
 
-    if obs_time is not None:
-        # Calculate Earth-Sun distance
-        es_distance = sunpos.nrel_earthsun_distance(obs_time).to_numpy()
-
-        # Deal with multiple input times
-        if len(pd.Series(obs_time)) > 1:
-            f0_spectra = f0_spectra[None, :] / es_distance[:, None] ** 2
-        else:
-            f0_spectra /= es_distance**2
-
     return f0_spectra, f0_wave
 
 
-def bandpass_avg(data, input_wavelengths, window_size=10, target_wavelengths=None):
+def bandpass_avg(
+        data,
+        input_wavelengths,
+        window_size=10,
+        target_wavelengths=None
+        ):
     """Apply a band-pass filter to the data.
 
     Parameters
@@ -303,7 +323,7 @@ def bandpass_avg(data, input_wavelengths, window_size=10, target_wavelengths=Non
     if target_wavelengths is None:
         target_wavelengths = input_wavelengths
 
-    filtered_data = np.empty((num_samples, len(target_wavelengths)))
+    filtered_data = np.empty((num_samples, len(target_wavelengths))) * np.nan
 
     for idx, target_wl in enumerate(target_wavelengths):
         start = target_wl - half_window
@@ -311,7 +331,8 @@ def bandpass_avg(data, input_wavelengths, window_size=10, target_wavelengths=Non
         cols_in_range = np.where(
             (input_wavelengths >= start) & (input_wavelengths <= end)
         )[0]
-        filtered_data[:, idx] = np.nanmean(data[:, cols_in_range], axis=1)
+        if cols_in_range.size > 0:
+            filtered_data[:, idx] = np.nanmean(data[:, cols_in_range], axis=1)
 
     return filtered_data if num_samples > 1 else filtered_data.flatten()
 
@@ -351,24 +372,97 @@ def get_column_prods(df, type_prefix):
     return data_dict
 
 
+def read_sb(filename_sb):
+    """Read SeaBASS file and returns just the data.
+
+    Input
+    -----
+    filename_sb : str
+        path to seabass file
+
+    Output
+    ------
+    data : pandas dataframe object
+        seabass data from file
+    """
+    with open(filename_sb, "r") as file:
+        lines = [line.rstrip() for line in file]
+
+    # Parse headers, get index where they end
+    idx_endheader = [index for index, value in enumerate(lines)
+                     if value == "/end_header"]
+    header_lines = lines[1:idx_endheader[0]]
+    headers = dict()
+    comments = []
+    for header_line in header_lines:
+        if header_line.startswith("!"):
+            # Separate out the comments
+            comments.append(header_line)
+        else:
+            # Split the header and add to the dictionary
+            key, value = header_line.split("=", 1)
+            headers[key[1:]] = value  # Remove leading "/" from key
+
+    # Pull data into pandas dataframe
+    data = pd.read_csv(filename_sb,
+                       skiprows=idx_endheader[0]+1,
+                       names=headers["fields"].split(","),
+                       na_values=headers["missing"])
+
+    # Index by datetime
+    get_sb_datetime(data)
+
+    return data
+
+
+def get_sb_datetime(df):
+    """Parse datetime from different combinations of dates and times."""
+    if all(col in df.columns for col in ["year", "month", "day",
+                                         "hour", "minute", "second"]):
+        df["datetime"] = pd.to_datetime(df[["year", "month", "day",
+                                            "hour", "minute", "second"]])
+    elif all(col in df.columns for col in ["year", "month", "day", "time"]):
+        df["datetime"] = pd.to_datetime(
+            df["year"].astype(str) + df["month"].astype(str).str.zfill(2)
+            + df["day"].astype(str).str.zfill(2) + ' ' + df["time"])
+    elif all(col in df.columns for col in ["date", "time"]):
+        df["datetime"] = pd.to_datetime(
+            df["date"].astype(str) + ' ' + df["time"])
+    elif all(col in df.columns for col in ["year", "month", "day"]):
+        df["datetime"] = pd.to_datetime(df[["year", "month", "day"]])
+    elif all(col in df.columns for col in ["date", "hour",
+                                           "minute", "second"]):
+        df["datetime"] = pd.to_datetime(
+            df["date"].astype(str) + ' ' + df["hour"].astype(str).str.zfill(2)
+            + ':' + df["minute"].astype(str).str.zfill(2) + ':'
+            + df["second"].astype(str).str.zfill(2))
+    else:
+        print("Unrecognized date/time format in DataFrame columns."
+              "\nMay be a profile, but doublecheck.")
+        return
+
+    # Reindex the dataframe with the new datetime
+    df.set_index("datetime", inplace=True)
+
+
 ##---------------------------------------------------------------------------##
 #                            AERONET_OC Utilities                             #
 ##---------------------------------------------------------------------------##
 
 
-def construct_url(aoc_site, data_level, start_date, end_date):
-    """Craft the AERONET-OC data URL.
+def construct_url(aeronet_site, data_level, start_date, end_date):
+    """Craft the AERONET data URL for Lwn (AERONET-OC) or SDA (AERONET) data.
 
     Parameters
     ----------
-    aoc_site : str, optional
-        Specific AERONET-OC site (else AAOT by default)
-    start_date : datetime object, optional
-        Beginning of Aeronet data to run. Defaults to 1 Mar 2024.
+    aeronet_site : str, optional
+        Specific AERONET (or -OC) site
+    start_date : datetime object
+        Beginning of Aeronet data to run.
     end_date : datetime object, optional
-        End of Aeronet data to run. Defaults to today.
+        End of Aeronet data to run.
     data_level : int, {10, 15, 20}
-        data quality; 20 (default, highest quality), 15, or 10.
+        data quality; 20 (highest quality), 15, or 10.
 
     Returns
     -------
@@ -377,19 +471,28 @@ def construct_url(aoc_site, data_level, start_date, end_date):
 
     """
     # Validate inputs
-    if aoc_site not in AERONET_SITES:
+    if aeronet_site not in AERONET_SITES:
         raise ValueError(
-            f"{aoc_site} is not an AERONET site. Available "
+            f"{aeronet_site} is not an AERONET site. Available "
             f"sites are: {', '.join(AERONET_SITES)}"
         )
 
-    url = (
-        "https://aeronet.gsfc.nasa.gov/cgi-bin/print_web_data_v3?"
-        f"AVG=10&LWN{data_level}=1&year={start_date.year}"
-        f"&month={start_date.month}&day={start_date.day}"
-        f"&if_no_html=1&year2={end_date.year}&month2={end_date.month}"
-        f"&day2={end_date.day}&site={aoc_site}"
-    )
+    if aeronet_site in OCEAN_SITES:
+        url = (
+            "https://aeronet.gsfc.nasa.gov/cgi-bin/print_web_data_v3?"
+            f"AVG=10&LWN{data_level}=1&year={start_date.year}"
+            f"&month={start_date.month}&day={start_date.day}"
+            f"&if_no_html=1&year2={end_date.year}&month2={end_date.month}"
+            f"&day2={end_date.day}&site={aeronet_site}"
+        )
+    else:
+        url = (
+            "https://aeronet.gsfc.nasa.gov/cgi-bin/print_web_data_v3?"
+            f"AVG=10&SDA{data_level}=1&year={start_date.year}"
+            f"&month={start_date.month}&day={start_date.day}"
+            f"&if_no_html=1&year2={end_date.year}&month2={end_date.month}"
+            f"&day2={end_date.day}&site={aeronet_site}"
+        )
 
     return url
 
@@ -426,14 +529,14 @@ def get_data_dict(df, search_str=None):
 
 
 def process_aeronet(
-    aoc_site="AAOT", start_date="2024-03-01", end_date=None, data_level=15
+    aeronet_site="AAOT", start_date="2024-03-01", end_date=None, data_level=15
 ):
     """Download and process AERONET-OC data for matchups.
 
     Parameters
     ----------
-    aoc_site : str, optional
-        Specific AERONET-OC site (else AAOT by default)
+    aeronet_site : str, optional
+        Specific AERONET site (else AAOT by default)
     start_date : datetime or str, optional
         Beginning of Aeronet data to run. Defaults to "2024-03-01"
     end_date : datetime or str, optional
@@ -444,7 +547,8 @@ def process_aeronet(
     Returns
     -------
     pandas DataFrame object
-        Dataframe of downloaded AERONET-OC data
+        Dataframe of downloaded AERONET data, semi-processed if AERONET-OC, or
+        full SDA data if AERONET
 
     """
     # Set up processing
@@ -454,57 +558,64 @@ def process_aeronet(
     end_date = pd.to_datetime(end_date, errors="raise")
 
     # Make url
-    url_aoc = construct_url(aoc_site, data_level, start_date, end_date)
+    url_aeronet = construct_url(aeronet_site, data_level, start_date, end_date)
 
     # Download data (skip the 5 header rows)
     try:
-        df_aoc_full = pd.read_csv(url_aoc, delimiter=",", na_values=-999, skiprows=5)
+        df_full = pd.read_csv(
+            url_aeronet, delimiter=",", na_values=-999, skiprows=5
+            )
     except Exception as e:
         raise Exception(
-            f"Could not download data. Try another station, reduce"
-            f" the data_level, or expand the times. (Error: {e})"
+            f"Error: {e}: Could not download data. Try another station, "
+            f"reduce the data_level, or expand the times."
         )
 
     # Drop empty columns
-    df_aoc_full.dropna(axis=1, how="all", inplace=True)
+    df_full.dropna(axis=1, how="all", inplace=True)
 
     # Parse datetimes
-    df_aoc_full["aoc_datetime"] = pd.to_datetime(
-        df_aoc_full["Date(dd-mm-yyyy)"] + " " + df_aoc_full["Time(hh:mm:ss)"],
-        format="%d:%m:%Y %H:%M:%S",
+    date_col = [col for col in df_full.columns if col.startswith("Date")][0]
+    time_col = [col for col in df_full.columns if col.startswith("Time")][0]
+    df_full["field_datetime"] = pd.to_datetime(
+        df_full[date_col] + " " + df_full[time_col],
+        format="%d:%m:%Y %H:%M:%S"
     ).dt.tz_localize("UTC")
 
-    # Get subset of Lwn_f/Q columns (ignore the count columns)
-    # Alternatively, could pull Lwn_IOP for L11 BRDF
-    subset_lwn = [
-        col
-        for col in df_aoc_full.columns
-        if "Lwn_f/Q" in col and "N[Lwn_f/Q" not in col
-    ]
-    lwn_iop = df_aoc_full[subset_lwn].values
+    if aeronet_site in OCEAN_SITES:
+        # Get subset of Lwn_f/Q columns (ignore the count columns)
+        # Alternatively, could pull Lwn_IOP for L11 BRDF
+        subset_lwn = [
+            col
+            for col in df_full.columns
+            if "Lwn_f/Q" in col and "N[Lwn_f/Q" not in col
+        ]
+        lwn_iop = df_full[subset_lwn].values
 
-    # Now get array of wavelengths from columns
-    wavelengths, _ = get_data_dict(df_aoc_full[subset_lwn], "Lwn_f/Q")
+        # Now get array of wavelengths from columns
+        wavelengths, _ = get_data_dict(df_full[subset_lwn], "Lwn_f/Q")
 
-    # Lwn need to be normalized by F0, the mean solar irradiance at top of atm
-    # Note: Lwn_IOP already accounts for the Earth-Sun Distance, BRDF, and
-    # atmosphere transmittance
-    f0_spectra, _ = get_f0(wavelengths)
+        # Lwn need to be normalized by F0
+        # Note: Lwn_IOP already accounts for the Earth-Sun Distance, BRDF, and
+        # atmosphere transmittance
+        f0_spectra, _ = get_f0(wavelengths)
 
-    # Normalize to get Rrs
-    rrs = lwn_iop / f0_spectra[None, :]
+        # Normalize to get Rrs
+        rrs = lwn_iop / f0_spectra[None, :]
 
-    # Generate new column names and make the rrs dataframe
-    aoc_rrs_cols = [f"aoc_rrs{wavelength}" for wavelength in wavelengths]
-    df_rrs = pd.DataFrame(rrs, columns=aoc_rrs_cols)
+        # Generate new column names and make the rrs dataframe
+        rrs_cols = [f"field_rrs{wavelength}" for wavelength in wavelengths]
+        df_rrs = pd.DataFrame(rrs, columns=rrs_cols)
 
-    # Now combine with the subset of the full dataframe
-    df_aoc = pd.concat([df_aoc_full[AOC_KEEP_COLS], df_rrs], axis=1)
+        # Now combine with the subset of the full dataframe
+        df_aeronet = pd.concat([df_full[AOC_KEEP_COLS], df_rrs], axis=1)
+    else:
+        df_aeronet = df_full
 
     # Do some final cleanup
-    df_aoc.rename(columns=COLUMN_RENAME, inplace=True)
+    df_aeronet.rename(columns=COLUMN_RENAME, inplace=True)
 
-    return df_aoc
+    return df_aeronet
 
 
 ##---------------------------------------------------------------------------##
@@ -527,12 +638,16 @@ def parse_quality_flags(flag_value):
 
     """
     return [
-        flag_name for flag_name, value in L2_FLAGS.items() if (flag_value & value) != 0
+        flag_name for flag_name, value in L2_FLAGS.items()
+        if (flag_value & value) != 0
     ]
 
 
 def get_fivebyfive(file, latitude, longitude, rrs_wavelengths):
-    """Get stats on a 5x5 box around station coordinates of a satellite granule.
+    """Get stats on 5x5 box around station coordinates of a satellite granule.
+
+    This checks l2flags and runs statistics on valid pixels and returns their
+    valid count, the coefficient of variance (cv), and the Rrs values.
 
     Parameters
     ----------
@@ -547,8 +662,25 @@ def get_fivebyfive(file, latitude, longitude, rrs_wavelengths):
 
     Returns
     -------
-    None.
+    dict
+        A dictionary of the processed 5x5 box with:
+            - "sat_datetime": pd.datetime
+                Datetime of the overall granule start time
+            - "sat_cv": float
+                Median coefficient of variation of Rrs(405nm - 570nm)
+            - "sat_latitude": float
+                Latitude of center pixel
+            - "sat_longitude": float
+                Longitude of center pixel
+            - "sat_pixel_valid": float
+                Number of valid pixels in 5x5 box based on l2 flags
 
+    Notes
+    -----
+    This is set to use just Rrs data for the demo. As an exercise, make this
+    function more generalized by adding an input for the desired product and
+    removing the wavelength dependency (if not needed) as well as the cv
+    calculation. This will also require refactoring the `match_data` function.
     """
     with xr.open_dataset(file, group="navigation_data") as ds_nav:
         sat_lat = ds_nav["latitude"].values
@@ -569,22 +701,19 @@ def get_fivebyfive(file, latitude, longitude, rrs_wavelengths):
     pixel_end = min(center_pixel + 2 + 1, sat_lat.shape[1])
 
     # Extract the data
+    # NOTE: This is hard-coded to Rrs from an L2 AOP file.
     with xr.open_dataset(file, group="geophysical_data") as ds_data:
         rrs_data = (
-            ds_data["Rrs"]
-            .isel(
+            ds_data["Rrs"].isel(
                 number_of_lines=slice(line_start, line_end),
                 pixels_per_line=slice(pixel_start, pixel_end),
-            )
-            .values
+            ).values
         )
         flags_data = (
-            ds_data["l2_flags"]
-            .isel(
+            ds_data["l2_flags"].isel(
                 number_of_lines=slice(line_start, line_end),
                 pixels_per_line=slice(pixel_start, pixel_end),
-            )
-            .values
+            ).values
         )
 
     # Calculate the bitwise OR of all flags in EXCLUSION_FLAGS to get a mask
@@ -602,7 +731,8 @@ def get_fivebyfive(file, latitude, longitude, rrs_wavelengths):
 
         # Exclude spectra > 1.5 stdevs away
         std_mask = np.all(
-            np.abs(rrs_valid - rrs_mean_initial) <= 1.5 * rrs_std_initial, axis=1
+            np.abs(rrs_valid - rrs_mean_initial) <= 1.5 * rrs_std_initial,
+            axis=1
         )
         rrs_std = np.std(rrs_valid[std_mask], axis=0)
         rrs_mean = np.mean(rrs_valid[std_mask], axis=0).flatten()
@@ -618,27 +748,33 @@ def get_fivebyfive(file, latitude, longitude, rrs_wavelengths):
 
     # Put in dictionary of the row
     row = {
-        "oci_datetime": pd.to_datetime(
-            file.granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"]
+        "sat_datetime": pd.to_datetime(
+            file.granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"],
+            utc=0
         ),
-        "oci_cv": rrs_cv_median,
-        "oci_latitude": sat_lat[center_line, center_pixel],
-        "oci_longitude": sat_lon[center_line, center_pixel],
-        "oci_pixel_valid": np.sum(valid_mask),
+        "sat_cv": rrs_cv_median,
+        "sat_latitude": sat_lat[center_line, center_pixel],
+        "sat_longitude": sat_lon[center_line, center_pixel],
+        "sat_pixel_valid": np.sum(valid_mask),
     }
 
     # Add mean spectra to the row dictionary
     for wavelength, mean_value in zip(rrs_wavelengths, rrs_mean):
-        key = f"oci_rrs{int(wavelength)}"
+        key = f"sat_rrs{int(wavelength)}"
         row[key] = mean_value
 
     return row
 
 
-def process_satellite(
-    start_date, end_date, latitude, longitude, sat="PACE", selected_dates=None
+def get_sat_ts_matchups(
+    start_date,
+    end_date,
+    latitude,
+    longitude,
+    sat="PACE_AOP",
+    selected_dates=None
 ):
-    """Download and process satellite data for matchups.
+    """Make satellite timeseries of matchups from single station.
 
     Caution: If the date or coordinates aren't formatted correctly, it might
     pull a huge granule list and take forever to run. If it takes more than 45
@@ -691,15 +827,15 @@ def process_satellite(
 
     # Run Earthaccess data search
     results = earthaccess.search_data(
-        point=(longitude, latitude), temporal=time_bounds, short_name=short_name
+        point=(longitude, latitude),
+        temporal=time_bounds,
+        short_name=short_name
     )
     if selected_dates is not None:
         filtered_results = [
             result
             for result in results
-            if result["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"][
-                :10
-            ]
+            if result["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"][:10]
             in selected_dates
         ]
         print(f"Filtered to {len(filtered_results)} Granules.")
@@ -731,7 +867,7 @@ def process_satellite(
 
 def match_data(
     df_sat,
-    df_aoc,
+    df_field,
     cv_max=0.15,
     senz_max=60.0,
     min_percent_valid=55.0,
@@ -744,7 +880,7 @@ def match_data(
     ----------
     df_sat : pandas dataframe
         Satellite data from flat validation file.
-    df_aoc : pandas dataframe
+    df_field : pandas dataframe
         Field data from flat validation file.
     cv_max : float, default 0.15
         Maximum coefficient of variation (stdev/mean) for sat data.
@@ -761,38 +897,47 @@ def match_data(
     -------
     pandas dataframe of matchups for product
 
+    Notes
+    -----
+    This is hard-coded to match on Rrs for the demo. For other products, take
+    out the cv parameter and make the row product column search more generic.
     """
     # Setup
     time_window = pd.Timedelta(minutes=max_time_diff)
     df_match_list = []
 
     # Filter Field data based on Solar Zenith
-    df_aoc_filtered = df_aoc[df_aoc["aoc_solar_zenith"] <= senz_max]
+    df_field_filtered = df_field[df_field["field_solar_zenith"] <= senz_max]
 
     # Filter satellite data based on cv threshold
-    df_sat_filtered = df_sat[df_sat["oci_cv"] <= cv_max]
+    df_sat_filtered = df_sat[df_sat["sat_cv"] <= cv_max]
 
     # Filter satellite data based on percent good pixels
     df_sat_filtered = df_sat_filtered[
-        df_sat_filtered["oci_pixel_valid"] >= min_percent_valid * 25 / 100
+        df_sat_filtered["sat_pixel_valid"] >= min_percent_valid * 25 / 100
     ]
 
     for _, sat_row in df_sat_filtered.iterrows():
         # Filter field data based on time difference and coordinates
-        time_diff = abs(df_aoc_filtered["aoc_datetime"] - sat_row["oci_datetime"])
-        within_time = time_diff <= time_window
-        within_lat = 0.2 >= abs(
-            df_aoc_filtered["aoc_latitude"] - sat_row["oci_latitude"]
+        time_diff = abs(
+            df_field_filtered["field_datetime"] - sat_row["sat_datetime"]
+            )
+        time_mask = time_diff <= time_window
+        lat_mask = 0.2 >= abs(
+            df_field_filtered["field_latitude"] - sat_row["sat_latitude"]
         )
-        within_lon = 0.2 >= abs(
-            df_aoc_filtered["aoc_longitude"] - sat_row["oci_longitude"]
+        lon_mask = 0.2 >= abs(
+            df_field_filtered["field_longitude"] - sat_row["sat_longitude"]
         )
-        field_matches = df_aoc_filtered[within_time & within_lat & within_lon]
+        field_matches = df_field_filtered[time_mask & lat_mask & lon_mask]
 
         if field_matches.shape[0] > 5:
             # Filter by Standard Deviation for rrs columns
             rrs_cols = [
-                col for col in field_matches.columns if col.startswith("aoc_rrs")
+                col for col in field_matches.columns
+                if col.startswith("field_rrs")
+                and int(col.rsplit("_rrs")[1]) >= 400
+                and int(col.rsplit("_rrs")[1]) <= 700
             ]
             if rrs_cols:
                 mean_spectra = field_matches[rrs_cols].mean(axis=0)
@@ -804,7 +949,9 @@ def match_data(
 
         if not field_matches.empty:
             # Select the best match based on time delta
-            time_diff = abs(field_matches["aoc_datetime"] - sat_row["oci_datetime"])
+            time_diff = abs(
+                field_matches["field_datetime"] - sat_row["sat_datetime"]
+                )
             best_match = field_matches.loc[time_diff.idxmin()]
             df_match_list.append({**best_match.to_dict(), **sat_row.to_dict()})
 
@@ -1008,7 +1155,12 @@ def format_ticks(ax):
 
 
 def plot_bland_altman(
-    ax1, metrics, binscale, scat, xx_unc_modl, x_label="x", y_label="y"
+    ax1,
+    metrics,
+    binscale,
+    xx_unc_modl,
+    x_label="x",
+    y_label="y"
 ):
     """Plot Bland-Altman plot.
 
@@ -1020,8 +1172,6 @@ def plot_bland_altman(
         Bland-Altman metrics.
     binscale : float
         Scaling factor for bin size.
-    scat : bool
-        If False, plot as 2D histogram.
     xx_unc_modl : float
         Uncertainty in X.
     x_label : string, default "x"
@@ -1039,32 +1189,14 @@ def plot_bland_altman(
     ba_independ = metrics["ba_independ"]
     ba_stat = metrics["ba_stat"]
 
-    nbin = int(0.5 * binscale * np.sqrt(len(jj)))
     min_kk = meanbias - 5 * np.std(kk)
     max_kk = meanbias + 5 * np.std(kk)
-
-    gamma = 0.5
-    if scat:
-        min_jj = np.min(jj)
-        max_jj = np.max(jj)
-        lineclr, loaclr, fitclr = (COLOR_LINE, COLOR_LOA, COLOR_FITLINE)
-        ax1.scatter(jj, kk, color=COLOR_SCATTER)
-        ax1.set_xlim([min_jj, max_jj])
-        ax1.set_ylim([min_kk, max_kk])
-    else:
-        jj_sorted = np.sort(jj)
-        min_jj = jj_sorted[int(0.01 * len(jj))]
-        max_jj = jj_sorted[int(0.99 * len(jj))]
-        lineclr, loaclr, fitclr = ("white", "yellow", "cyan")
-        h = ax1.hist2d(
-            jj,
-            kk,
-            bins=(nbin, nbin),
-            norm=mcolors.PowerNorm(gamma),
-            cmap=plt.cm.inferno,
-            range=[[min_jj, max_jj], [min_kk, max_kk]],
-        )
-        plt.colorbar(h[3], ax=ax1)
+    min_jj = np.min(jj)
+    max_jj = np.max(jj)
+    lineclr, loaclr, fitclr = (COLOR_LINE, COLOR_LOA, COLOR_FITLINE)
+    ax1.scatter(jj, kk, color=COLOR_SCATTER)
+    ax1.set_xlim([min_jj, max_jj])
+    ax1.set_ylim([min_kk, max_kk])
 
     ax1.set_title("Bland-Altman plot", fontsize=SIZE_TITLE)
     ylabel = (
@@ -1073,8 +1205,13 @@ def plot_bland_altman(
         else f"Bias, ${y_label}-{x_label}$"
     )
     ax1.set_ylabel(ylabel, fontsize=SIZE_AXLABEL)
-    ax1.set_xlabel(f"Paired mean, $({x_label}+{y_label})/2$", fontsize=SIZE_AXLABEL)
-    ax1.plot([min_jj, max_jj], [0, 0], color=lineclr, linestyle="solid", linewidth=4.0)
+    ax1.set_xlabel(
+        f"Paired mean, $({x_label}+{y_label})/2$", fontsize=SIZE_AXLABEL
+        )
+    ax1.plot(
+        [min_jj, max_jj], [0, 0],
+        color=lineclr, linestyle="solid", linewidth=4.0
+        )
 
     if ba_independ:
         ax1.plot(
@@ -1101,7 +1238,10 @@ def plot_bland_altman(
             linewidth=2.0,
             label="Upper LOA",
         )
-        ax1.fill_between([min_jj, max_jj], LOAlow, LOAhgh, color=loaclr, alpha=0.1)
+        ax1.fill_between(
+            [min_jj, max_jj], LOAlow, LOAhgh,
+            color=loaclr, alpha=0.1
+            )
     else:
         ba_regress_result = stats.linregress(jj, kk)
         ba_min_fit_yy = ba_regress_result.slope * min_jj + ba_regress_result.intercept
@@ -1130,7 +1270,7 @@ def plot_bland_altman(
 
 
 def plot_scatter(
-    ax2, xx, yy, regress_metrics, binscale, scat, x_label="x", y_label="y"
+    ax2, xx, yy, regress_metrics, binscale, x_label="x", y_label="y"
 ):
     """Plot scatter plot with regression line.
 
@@ -1146,33 +1286,18 @@ def plot_scatter(
         Regression metrics.
     binscale : float
         Scaling factor for bin size.
-    scat : bool
-        If False, plot as 2D histogram.
     x_label : string, default "x"
         String for labels for x data
     y_label : string, default "y"
         String for labels for y data
 
     """
-    nbin = int(0.5 * binscale * np.sqrt(len(xx)))
     min_val = min(np.min(xx), np.min(yy))
     max_val = max(np.max(xx), np.max(yy))
-    gamma = 0.5
 
-    if scat:
-        ax2.scatter(xx, yy, color=COLOR_SCATTER)
-        ax2.set_xlim([min_val, max_val])
-        ax2.set_ylim([min_val, max_val])
-    else:
-        g = ax2.hist2d(
-            xx,
-            yy,
-            bins=(nbin, nbin),
-            norm=mcolors.PowerNorm(gamma),
-            cmap=plt.cm.inferno,
-            range=[[min_val, max_val], [min_val, max_val]],
-        )
-        plt.colorbar(g[3], ax=ax2)
+    ax2.scatter(xx, yy, color=COLOR_SCATTER)
+    ax2.set_xlim([min_val, max_val])
+    ax2.set_ylim([min_val, max_val])
 
     ax2.set_title("Scatterplot", fontsize=SIZE_TITLE)
     ax2.set_xlabel(f"${x_label}$", fontsize=SIZE_AXLABEL)
@@ -1218,7 +1343,6 @@ def plot_BAvsScat(
     y_input,
     label="",
     saveplot=None,
-    scat=True,
     binscale=1.0,
     xx_unc_modl=np.sqrt(0.5),
     yy_unc_modl=np.sqrt(0.5),
@@ -1238,8 +1362,6 @@ def plot_BAvsScat(
         Text label for plotting.
     saveplot : string, default None
         Set to save plot in ../output/ with the string as the filename.
-    scat : boolean, default True
-        Make a 2D histogram if False, regular scatter plot if True.
     binscale : float, default 1.0
         Scaling factor for how many bins to include in a 2D histogram.
     xx_unc_modl : float, default np.sqrt(0.5)
@@ -1272,8 +1394,8 @@ def plot_BAvsScat(
     regress_metrics = compute_regression_metrics(xx, yy, is_type2=is_type2)
 
     fig, ax1, ax2 = setup_plot(label)
-    plot_bland_altman(ax1, ba_metrics, binscale, scat, xx_unc_modl, x_label, y_label)
-    plot_scatter(ax2, xx, yy, regress_metrics, binscale, scat, x_label, y_label)
+    plot_bland_altman(ax1, ba_metrics, binscale, xx_unc_modl, x_label, y_label)
+    plot_scatter(ax2, xx, yy, regress_metrics, binscale, x_label, y_label)
 
     if saveplot is not None:
         figpath = Path("../output") / saveplot
@@ -1301,53 +1423,72 @@ def plot_BAvsScat(
     }
 ```
 
+For those starting this demonstration fresh, we'll double-check that we've got our earthaccess credentials set up!
+
+```{code-cell} ipython3
+auth = earthaccess.login(strategy="interactive", persist=True)
+```
+
 ## 2. Process AERONET-OC data
 
-We will use the function `process_aeronet` to download and process AERONET-OC data from the 'Casablanca_Platform' site. We will filter Level 1.5 data from the dates June 1, 2024 to July 31, 2024. This function will output a pandas dataframe of every AERONET-OC record between the dates.
+We will use the function `process_aeronet` to download and process AERONET-OC data from the 'AAOT' site. We will filter Level 1.5 data from the dates June 1, 2024 to July 31, 2024. This function will output a pandas dataframe of every AERONET-OC record between the dates.
 
 There are three "levels" of AERONET-OC data in terms of data quality: 1, 1.5, and 2. If a complete measurement sequence with the instruments is able to be performed, it is collected and stored as Level 1. These data are then passed through an automated quality control system and stored as Level 1.5 if they pass all tests. Finally, Level 2 data are data from Level 1.5 that are subsequently screened by an experienced scientist and validated. We'll be using Level 1.5 data to pull as much good quality data as possible without the time lag for manual validation. More information on AERONET-OC levels can be found in [Zibordi et al., 2009.](https://doi.org/10.1175/2009JTECHO654.1)
 
 ```{code-cell} ipython3
-aoc_cb = process_aeronet(
-    aoc_site="Casablanca_Platform",
-    start_date="2024-06-01",
-    end_date="2024-07-31",
+df_aeronet = process_aeronet(
+    aeronet_site="AAOT",
+    start_date="2024-03-01",
+    end_date="2025-06-30",
     data_level=15,
 )
-aoc_cb.head()
+df_aeronet.head()
 ```
 
-## 3. Process PACE OCI data
+## 3. Download PACE OCI granules
 
-We will use the function `process_satellite` to search for `PACE_OCI_L2_AOP_NRT` data using `earthacces` within the specified time range and at the (lat,lon) coordinate of the Casablanca_Platform AERONET-OC site. This function finds the closest pixel and extracts all data within a 5x5 pixel window, excludes pixels based on L2 flags, calculates the mean to retrive a single Rrs spectra, and computes matchup statistics. The function outputs a pandas dataframe of every `PACE_OCI_L2_AOP_NRT` Rrs spectra for the specified time range. We'll also include an optional list of unique date strings from the AERONET-OC dataframe to "skip" the granules that don't have any field data associated with them.
+We will use the function `get_sat_ts_matchups` to search for `PACE_OCI_L2_AOP_NRT` data using `earthaccess` within the specified time range and at the (lat,lon) coordinate of the AAOT AERONET-OC site. This function finds the closest pixel and extracts all data within a 5x5 pixel window, excludes pixels based on L2 flags, calculates the mean to retrive a single Rrs spectra, and computes matchup statistics. The function outputs a pandas dataframe of every `PACE_OCI_L2_AOP` Rrs spectra for the specified time range. We'll also include an optional list of unique date strings from the AERONET-OC dataframe to "skip" the granules that don't have any field data associated with them.
+
+<div class="alert alert-block alert-warning">
+Note: This section will actually take quite a while to pull enough granules for the plotting section to give us robust stats (at least 35 valid matchups are needed), so we'll be skipping this part in favor of a pre-made dataset for the demo.
+</div>
 
 ```{code-cell} ipython3
 :scrolled: true
 :tags: [scroll-output]
 
 # Pull out coordinates
-aoc_lat = aoc_cb["aoc_latitude"][0]
-aoc_lon = aoc_cb["aoc_longitude"][0]
+aeronet_lat = df_aeronet["field_latitude"][0]
+aeronet_lon = df_aeronet["field_longitude"][0]
 
 # Pull out unique days
-unique_days = aoc_cb["aoc_datetime"].dt.date.unique()
+unique_days = df_aeronet["field_datetime"].dt.date.unique()
 unique_days_str = [day.strftime("%Y-%m-%d") for day in unique_days]
 
-sat_cb = process_satellite(
-    start_date="2024-06-01",
-    end_date="2024-07-31",
-    latitude=aoc_lat,
-    longitude=aoc_lon,
-    sat="PACE",
+df_satellite = get_sat_ts_matchups(
+    start_date="2024-03-01",
+    end_date="2024-03-05",
+    latitude=aeronet_lat,
+    longitude=aeronet_lon,
+    sat="PACE_AOP",
     selected_dates=unique_days_str,
 )
 ```
 
+## 3b. Precooked Download PACE OCI granules
+
+Since the previous section takes quite a while to pull the granules we need, here's a premade data pull of PACE OCI data (for AAOT). 
+
 ```{code-cell} ipython3
-sat_cb.head()
+df_satellite = pd.read_csv("/home/jovyan/shared-public/pace-hackweek/oci_quickpull_aaot.csv")
+df_satellite["sat_datetime"] = pd.to_datetime(df_satellite["sat_datetime"], utc=True)
 ```
 
-## 3. Apply matchup code
+```{code-cell} ipython3
+df_satellite.head()
+```
+
+## 4. Apply matchup code
 
 We will use the function `match_data` to create a matchup dataframe based on selection criteria. This function defaults to using the [Bailey and Werdell 2006](https://oceancolor.gsfc.nasa.gov/staff/jeremy/bailey_and_werdell_2006_rse.pdf) matchup criteria, which reduces the measurements made at a given station to one representative sample for validating against the satellite spectra. Data are filtered based on the solar zenith angle, their noise level, and the time difference (here 180 minutes from the satellite overpass). Potential satellite matchups are also reduced based on the signal to noise level of the 5x5 pixel aggregation.
 
@@ -1363,8 +1504,8 @@ We will use the function `match_data` to create a matchup dataframe based on sel
 :tags: [scroll-output]
 
 matchups = match_data(
-    sat_cb,
-    aoc_cb,
+    df_satellite,
+    df_aeronet,
     cv_max=0.60,
     senz_max=60.0,
     min_percent_valid=55.0,
@@ -1377,11 +1518,11 @@ matchups
 Pull out wavelengths and Rrs data from matchups
 
 ```{code-cell} ipython3
-dict_aoc = get_column_prods(matchups, "aoc")
+dict_aoc = get_column_prods(matchups, "field")
 waves_aoc = np.array(dict_aoc["rrs"]["wavelengths"])
 rrs_aoc = matchups[dict_aoc["rrs"]["columns"]].to_numpy()
 
-dict_sat = get_column_prods(matchups, "oci")
+dict_sat = get_column_prods(matchups, "sat")
 waves_sat = np.array(dict_sat["rrs"]["wavelengths"])
 rrs_sat = matchups[dict_sat["rrs"]["columns"]].to_numpy()
 ```
@@ -1419,8 +1560,8 @@ for idx, match_wave in enumerate(MATCH_WAVES):
             match_sat[valid_indices],
             label=fig_label,
             saveplot=None,
-            x_label="AERONET",
-            y_label="PACE",
+            x_label="AeronetOC",
+            y_label="PaceOCI",
             is_type2=True,
         )
         dict_stats["wavelength"] = match_wave
@@ -1431,4 +1572,8 @@ df_stats = pd.DataFrame(stats_list)
 df_stats.set_index("wavelength", inplace=True)
 df_stats = df_stats.fillna(-999)
 df_stats
+```
+
+```{code-cell} ipython3
+
 ```
