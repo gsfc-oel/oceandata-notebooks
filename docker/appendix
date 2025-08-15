@@ -5,7 +5,7 @@ USER root
 
 # system configuration
 RUN git config --system credential.helper 'cache --timeout 86400 --socket /tmp/git-credential-cache/socket' \
- && sh -c 'echo "/tmp/core_%e.%p" > /proc/sys/kernel/core_pattern' \
+ && sysctl -w kernel.core_pattern="/tmp/core-%e" \
  && sh -c 'echo "shopt -s globstar" > /etc/profile.d/globstar.sh'
 
 # # install OCSSW core files (i.e. no $OCSSWROOT/share or $OCSSWROOT/var)

@@ -14,11 +14,11 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: free space on runner
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
-          docker-images: false
+      # - name: free space on runner
+      #   uses: jlumbroso/free-disk-space@v1.3.1
+      #   with:
+      #     tool-cache: true
+      #     docker-images: false
       - name: checkout files in repo
         uses: actions/checkout@v4
         with:
