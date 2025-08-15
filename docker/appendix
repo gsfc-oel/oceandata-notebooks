@@ -5,49 +5,48 @@ USER root
 
 # system configuration
 RUN git config --system credential.helper 'cache --timeout 86400 --socket /tmp/git-credential-cache/socket' \
- && git config --system core.excludesFile '/etc/gitignore' \
- && echo 'core.[0-9]*' > /etc/gitignore \
+ && sh -c 'echo "/tmp/core_%e.%p" > /proc/sys/kernel/core_pattern' \
  && sh -c 'echo "shopt -s globstar" > /etc/profile.d/globstar.sh'
 
-# install OCSSW core files (i.e. no $OCSSWROOT/share or $OCSSWROOT/var)
-ARG OCSSWTAG=V2025.3
-ARG OCSSWROOT=/opt/ocssw
-ARG OCSSWROOT_PUBLIC=/home/${NB_USER}/shared-public/pace-hackweek/ocssw
-ENV OCSSWROOT=${OCSSWROOT}
-ADD https://oceandata.sci.gsfc.nasa.gov/manifest/install_ocssw ./
-ADD https://oceandata.sci.gsfc.nasa.gov/manifest/manifest.py ./
-RUN chmod +x install_ocssw \
- && ./install_ocssw --tag=${OCSSWTAG} -a odps --root --bin --opt --python \
- && rm install_ocssw manifest.py \
- && ln -s ${OCSSWROOT_PUBLIC}/var ${OCSSWROOT} \
- && ln -s ${OCSSWROOT_PUBLIC}/share ${OCSSWROOT} \
- && chown ${NB_USER}:${NB_USER} ${OCSSWROOT}/*.json ${OCSSWROOT}/python/*.json
+# # install OCSSW core files (i.e. no $OCSSWROOT/share or $OCSSWROOT/var)
+# ARG OCSSWTAG=V2025.3
+# ARG OCSSWROOT=/opt/ocssw
+# ARG OCSSWROOT_PUBLIC=/home/${NB_USER}/shared-public/pace-hackweek/ocssw
+# ENV OCSSWROOT=${OCSSWROOT}
+# ADD https://oceandata.sci.gsfc.nasa.gov/manifest/install_ocssw ./
+# ADD https://oceandata.sci.gsfc.nasa.gov/manifest/manifest.py ./
+# RUN chmod +x install_ocssw \
+#  && ./install_ocssw --tag=${OCSSWTAG} -a odps --root --bin --opt --python \
+#  && rm install_ocssw manifest.py \
+#  && ln -s ${OCSSWROOT_PUBLIC}/var ${OCSSWROOT} \
+#  && ln -s ${OCSSWROOT_PUBLIC}/share ${OCSSWROOT} \
+#  && chown ${NB_USER}:${NB_USER} ${OCSSWROOT}/*.json ${OCSSWROOT}/python/*.json
 
 # revert USER
 USER ${NB_USER}
 
-# jupyter configuration
-COPY src/prefix/ ${NB_PYTHON_PREFIX}/
+# # jupyter configuration
+# COPY src/prefix/ ${NB_PYTHON_PREFIX}/
 
-# install (locked) dependencies for oceandata-notebooks with the "docker" group
-RUN pip install --no-cache-dir --no-deps \
-      --extra-index-url "https://download.pytorch.org/whl/cpu" \
-      --no-binary netcdf4 \
-      -r requirements.txt
+# # install (locked) dependencies for oceandata-notebooks with the "docker" group
+# RUN pip install --no-cache-dir --no-deps \
+#       --extra-index-url "https://download.pytorch.org/whl/cpu" \
+#       --no-binary netcdf4 \
+#       -r requirements.txt
 
-# set up the bash kernel
-RUN python -m bash_kernel.install --sys-prefix
+# # set up the bash kernel
+# RUN python -m bash_kernel.install --sys-prefix
 
-# tell gh-scoped-creds which GitHub app to use for push access
-# see https://github.com/jupyterhub/gh-scoped-creds#github-app-configuration
-ENV GH_SCOPED_CREDS_CLIENT_ID="Iv1.bd27058fd393e285"
-ENV GH_SCOPED_CREDS_APP_URL="https://github.com/apps/cryocloud-github-access"
+# # tell gh-scoped-creds which GitHub app to use for push access
+# # see https://github.com/jupyterhub/gh-scoped-creds#github-app-configuration
+# ENV GH_SCOPED_CREDS_CLIENT_ID="Iv1.bd27058fd393e285"
+# ENV GH_SCOPED_CREDS_APP_URL="https://github.com/apps/cryocloud-github-access"
 
-# ignore select Python warnings
-# TODO: specifically cartopy.io.DownloadWarning
-ENV PYTHONWARNINGS="ignore::FutureWarning,ignore:::cartopy.io"
+# # ignore select Python warnings
+# # TODO: specifically cartopy.io.DownloadWarning
+# ENV PYTHONWARNINGS="ignore::FutureWarning,ignore:::cartopy.io"
 
-# configure uv tool
-ENV UV_CACHE_DIR=/tmp/uv/cache
-ENV UV_PROJECT_ENVIRONMENT=/tmp/uv/venv
-ENV UV_CONSTRAINT=/srv/docker/requirements.txt
+# # configure uv tool
+# ENV UV_CACHE_DIR=/tmp/uv/cache
+# ENV UV_PROJECT_ENVIRONMENT=/tmp/uv/venv
+# ENV UV_CONSTRAINT=/srv/docker/requirements.txt
